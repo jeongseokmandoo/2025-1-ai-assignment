@@ -39,12 +39,12 @@ def get_legal_moves(board):
             break
     if not found:
         return [(n//2, n//2)]
-    # 인접한 칸(거리 2 이내)에 돌이 있는 빈 칸만 후보로 선택
+    # 인접한 칸(거리 1 이내)에 돌이 있는 빈 칸만 후보로 선택
     for r in range(n):
         for c in range(n):
             if board[r][c] == '.':
-                for dr in range(-2, 3):
-                    for dc in range(-2, 3):
+                for dr in range(-1, 2):  # -1, 0, 1 (거리 1 이내)
+                    for dc in range(-1, 2):  # -1, 0, 1 (거리 1 이내)
                         nr = r + dr
                         nc = c + dc
                         if 0 <= nr < n and 0 <= nc < n:
@@ -200,8 +200,7 @@ def alpha_beta(board, depth, alpha, beta, maximizing, start_time, time_limit, co
 
 def iterative_deepening(board, time_limit, computer, opponent):
     best_move = None
-    best_score = NEG_INFINITY
-    depth = 5 # 최대 깊이 제한
+    depth = 1
     start_time = time.time()
     
     while True:
@@ -213,7 +212,6 @@ def iterative_deepening(board, time_limit, computer, opponent):
         current_best_score = NEG_INFINITY
         
         moves = get_legal_moves(board)
-        # 간단한 무브 오더링: 여기서는 그냥 legal moves 리스트 순서 그대로 탐색 (추후 개선 가능)
         for move in moves:
             new_board = copy_board(board)
             new_board[move[0]][move[1]] = computer
@@ -228,9 +226,11 @@ def iterative_deepening(board, time_limit, computer, opponent):
         # 현재 깊이의 탐색이 끝나면 결과를 업데이트
         if current_best is not None:
             best_move = current_best
-            best_score = current_best_score
         depth += 1
         
+        if len(moves) == 1:
+            break
+
         # 시간 제한 체크 후 반복 종료
         if time.time() - start_time > time_limit:
             break
