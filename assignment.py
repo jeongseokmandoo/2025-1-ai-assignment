@@ -2,6 +2,7 @@ import sys
 import time
 import copy
 import string
+import hashlib
 
 # 보드 크기 상수
 BOARD_SIZE = 19
@@ -9,6 +10,9 @@ BOARD_SIZE = 19
 # 알파-베타 탐색에서 사용할 아주 큰 값들
 INFINITY = float('inf')
 NEG_INFINITY = float('-inf')
+
+# 트랜스포지션 테이블 (중복 계산 방지)
+transposition_table = {}
 
 def create_board():
     return [['.' for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
@@ -100,36 +104,76 @@ def count_sequence(board, r, c, dr, dc, player):
     # 앞쪽(시퀀스 시작 전)
     start_r = r - dr
     start_c = c - dc
-    if start_r < 0 or start_r >= n or start_c < 0 or start_c >= n or board[start_r][start_c] == '.':
+    if 0 <= start_r < n and 0 <= start_c < n and board[start_r][start_c] == '.':
         open_ends += 1
     # 끝쪽(시퀀스 끝난 후)
-    if cur_r < 0 or cur_r >= n or cur_c < 0 or cur_c >= n or board[cur_r][cur_c] == '.':
+    if 0 <= cur_r < n and 0 <= cur_c < n and board[cur_r][cur_c] == '.':
         open_ends += 1
 
     return length, open_ends
 
+def detect_threats(board, player):
+    """즉각적인 승리 위협(4목)이나 이중 위협(3-3, 4-3)을 감지합니다"""
+    threats = []
+    directions = [(0,1), (1,0), (1,1), (1,-1)]
+    
+    # 빈 칸 탐색
+    for r in range(BOARD_SIZE):
+        for c in range(BOARD_SIZE):
+            if board[r][c] != '.':
+                continue
+                
+            # 이 위치에 돌을 두었을 때 형성되는 패턴 확인
+            temp_board = copy_board(board)
+            temp_board[r][c] = player
+            
+            open_threes = 0
+            open_fours = 0
+            
+            for dr, dc in directions:
+                length, open_ends = count_sequence(temp_board, r, c, dr, dc, player)
+                
+                if length == 4 and open_ends >= 1:
+                    open_fours += 1
+                elif length == 3 and open_ends == 2:
+                    open_threes += 1
+            
+            # 위협 감지
+            threat_score = 0
+            if open_fours > 0:  # 4목은 즉시 승리 위협
+                threat_score = 1000
+            elif open_threes >= 2:  # 이중 3목은 간접 승리 위협
+                threat_score = 500
+            elif open_threes == 1:
+                threat_score = 100
+                
+            if threat_score > 0:
+                threats.append((r, c, threat_score))
+    
+    return threats
+
 def pattern_weight(length, open_ends):
     """
     길이와 열린 끝(open_ends)에 따라 가중치를 반환합니다.
-    (예시는 기본적인 값이며, 실제 과제에서는 더 정교하게 조정할 수 있습니다.)
+    (개선된 가중치 체계)
     """
     if length >= 5:
         return 100000  # 승리 상태
     if length == 4:
         if open_ends == 2:
-            return 10000   # 열린 4: 즉시 승리 위협
+            return 15000   # 열린 4: 즉시 승리 위협 (강화)
         elif open_ends == 1:
-            return 1000    # 닫힌 4
+            return 2000    # 닫힌 4 (강화)
     if length == 3:
         if open_ends == 2:
-            return 1000    # 열린 3: 매우 강력한 수
+            return 2000    # 열린 3: 매우 강력한 수 (강화)
         elif open_ends == 1:
-            return 100     # 닫힌 3
+            return 150     # 닫힌 3 (강화)
     if length == 2:
         if open_ends == 2:
-            return 100     # 열린 2
+            return 150     # 열린 2 (강화)
         elif open_ends == 1:
-            return 10      # 닫힌 2
+            return 20      # 닫힌 2 (강화)
     if length == 1:
         if open_ends == 2:
             return 10
@@ -158,25 +202,119 @@ def evaluate_player(board, player):
                     score += pattern_weight(length, open_ends)
     return score
 
-def evaluate_board(board, computer, opponent):
-    """
-    향상된 평가 함수:
-    - 컴퓨터와 상대방의 점수를 각각 계산한 후 그 차이를 반환합니다.
-    """
-    # 승리 여부는 check_win에서 이미 처리되므로 여기서는 시퀀스 점수만 계산합니다.
-    comp_score = evaluate_player(board, computer)
-    opp_score = evaluate_player(board, opponent)
-    return comp_score - opp_score
+def evaluate_position(board, player):
+    """위치 기반 평가 점수 - 중앙 근처에 돌을 두는 것을 선호"""
+    score = 0
+    center = BOARD_SIZE // 2
+    for r in range(BOARD_SIZE):
+        for c in range(BOARD_SIZE):
+            if board[r][c] == player:
+                # 중앙에 가까울수록 높은 점수
+                distance = abs(r - center) + abs(c - center)
+                score += max(0, 10 - distance) * 2
+    return score
 
+def evaluate_board(board, computer, opponent):
+    """강화된 평가 함수"""
+    # 승리 조건 체크
+    if check_win(board, computer):
+        return 100000
+    if check_win(board, opponent):
+        return -100000
+    
+    # 패턴 점수
+    computer_pattern_score = evaluate_player(board, computer)
+    opponent_pattern_score = evaluate_player(board, opponent)
+    pattern_score = computer_pattern_score - opponent_pattern_score * 1.2  # 상대 패턴 가중치 증가
+    
+    # 위치 점수
+    computer_position_score = evaluate_position(board, computer)
+    opponent_position_score = evaluate_position(board, opponent)
+    position_score = computer_position_score - opponent_position_score
+    
+    # 위협 점수
+    computer_threats = detect_threats(board, computer)
+    opponent_threats = detect_threats(board, opponent)
+    threat_score = sum(score for _, _, score in computer_threats) - sum(score for _, _, score in opponent_threats) * 1.5
+    
+    # 총점
+    return pattern_score + position_score * 0.5 + threat_score
+
+def order_moves(board, moves, player, opponent):
+    """유망한 수를 먼저 평가하도록 이동 순서를 최적화합니다"""
+    move_scores = []
+    
+    for move in moves:
+        r, c = move
+        score = 0
+        
+        # 임시 보드 생성 없이 빠르게 휴리스틱 점수 계산
+        
+        # 1. 이 위치에 두면 이기는 경우 최우선
+        temp_board = copy_board(board)
+        temp_board[r][c] = player
+        if check_win(temp_board, player):
+            score += 100000
+            move_scores.append((move, score))
+            continue
+            
+        # 2. 상대방이 이 위치에 두면 이기는 경우 (방어) 차선
+        temp_board = copy_board(board)
+        temp_board[r][c] = opponent
+        if check_win(temp_board, opponent):
+            score += 50000
+            move_scores.append((move, score))
+            continue
+        
+        # 3. 위협 평가 (4목, 3-3 등)
+        temp_board = copy_board(board)
+        temp_board[r][c] = player
+        
+        # 간단한 패턴 점수 계산
+        for dr, dc in [(0,1), (1,0), (1,1), (1,-1)]:
+            length, open_ends = count_sequence(temp_board, r, c, dr, dc, player)
+            score += pattern_weight(length, open_ends) * 0.5
+        
+        # 4. 중앙에 가까울수록 유리
+        center = BOARD_SIZE // 2
+        distance = abs(r - center) + abs(c - center)
+        score += max(0, 10 - distance) * 5
+        
+        move_scores.append((move, score))
+    
+    # 점수 내림차순으로 정렬
+    return [move for move, score in sorted(move_scores, key=lambda x: x[1], reverse=True)]
+
+def generate_board_hash(board):
+    """보드의 해시값을 반환합니다"""
+    board_str = ''.join(''.join(row) for row in board)
+    return hashlib.md5(board_str.encode()).hexdigest()
 
 def alpha_beta(board, depth, alpha, beta, maximizing, start_time, time_limit, computer, opponent):
-    # 시간 초과 체크
+    """트랜스포지션 테이블이 적용된 알파-베타 탐색"""
+    # 시간 제한 체크
     if time.time() - start_time > time_limit:
         return evaluate_board(board, computer, opponent)
+    
+    # 종료 조건 체크
     if depth == 0 or is_terminal(board):
         return evaluate_board(board, computer, opponent)
     
+    # 트랜스포지션 테이블 키 생성
+    board_hash = generate_board_hash(board)
+    tt_key = (board_hash, depth, maximizing)
+    
+    # 테이블에 저장된 결과가 있으면 사용
+    if tt_key in transposition_table:
+        return transposition_table[tt_key]
+    
     moves = get_legal_moves(board)
+    
+    # 움직임 순서 최적화
+    current_player = computer if maximizing else opponent
+    opponent_player = opponent if maximizing else computer
+    moves = order_moves(board, moves, current_player, opponent_player)
+    
     if maximizing:
         value = NEG_INFINITY
         for move in moves:
@@ -186,6 +324,9 @@ def alpha_beta(board, depth, alpha, beta, maximizing, start_time, time_limit, co
             alpha = max(alpha, value)
             if alpha >= beta:
                 break  # 가지치기
+        
+        # 결과 저장
+        transposition_table[tt_key] = value
         return value
     else:
         value = INFINITY
@@ -196,44 +337,100 @@ def alpha_beta(board, depth, alpha, beta, maximizing, start_time, time_limit, co
             beta = min(beta, value)
             if alpha >= beta:
                 break  # 가지치기
+        
+        # 결과 저장
+        transposition_table[tt_key] = value
         return value
 
 def iterative_deepening(board, time_limit, computer, opponent):
+    """개선된 반복 심화 탐색 (시간 관리 포함)"""
     best_move = None
     depth = 1
     start_time = time.time()
     
-    while True:
-        # 시간 제한 체크
-        if time.time() - start_time > time_limit:
-            break
+    # 트랜스포지션 테이블 초기화
+    global transposition_table
+    transposition_table = {}
+    
+    # 위협 감지로 빠른 결정
+    my_threats = detect_threats(board, computer)
+    opponent_threats = detect_threats(board, opponent)
+    
+    # 즉시 이길 수 있는 위치가 있으면 즉시 선택
+    winning_moves = [(r, c) for r, c, score in my_threats if score >= 1000]
+    if winning_moves:
+        return winning_moves[0]
+    
+    # 상대방의 승리를 막아야 하는 위치가 있으면 즉시 방어
+    critical_defense = [(r, c) for r, c, score in opponent_threats if score >= 1000]
+    if critical_defense:
+        return critical_defense[0]
+    
+    # 시간 관리를 위한 예산 설정 (더 깊은 탐색에 더 많은 시간 할당)
+    time_budget = {}
+    total_budget = 0
+    for d in range(1, 10):
+        time_budget[d] = time_limit * (2**(d-1)) / (2**9 - 1)
+        total_budget += time_budget[d]
+    
+    # 기본 후보 이동 목록 가져오기
+    moves = get_legal_moves(board)
+    
+    # 후보가 하나뿐이면 즉시 선택
+    if len(moves) == 1:
+        return moves[0]
+    
+    # 이동 순서 최적화
+    moves = order_moves(board, moves, computer, opponent)
+    
+    accumulated_time = 0
+    
+    while depth <= 9:  # 최대 깊이 제한
+        depth_start_time = time.time()
         
         current_best = None
         current_best_score = NEG_INFINITY
         
-        moves = get_legal_moves(board)
+        # 강화된 알파-베타 탐색으로 최선의 수 결정
         for move in moves:
             new_board = copy_board(board)
             new_board[move[0]][move[1]] = computer
             score = alpha_beta(new_board, depth - 1, NEG_INFINITY, INFINITY, False, start_time, time_limit, computer, opponent)
+            
             if score > current_best_score:
                 current_best_score = score
                 current_best = move
+            
             # 시간 초과 시 중단
-            if time.time() - start_time > time_limit:
+            if time.time() - start_time > time_limit * 0.9:  # 안전 마진 10%
                 break
         
         # 현재 깊이의 탐색이 끝나면 결과를 업데이트
         if current_best is not None:
             best_move = current_best
+            
+            # 승리 위치를 찾았으면 즉시 반환
+            if current_best_score >= 90000:
+                return best_move
+        
+        # 시간 관리
+        depth_elapsed = time.time() - depth_start_time
+        accumulated_time += depth_elapsed
+        
+        # 다음 깊이 탐색 가능 여부 결정
+        remaining_time = time_limit - accumulated_time
+        next_depth_estimate = time_budget.get(depth + 1, time_limit)
+        
         depth += 1
         
-        if len(moves) == 1:
+        # 시간이 충분하지 않으면 중단
+        if remaining_time < next_depth_estimate * 1.5:  # 안전 마진 50%
             break
-
-        # 시간 제한 체크 후 반복 종료
-        if time.time() - start_time > time_limit:
+        
+        # 시간 제한 체크
+        if time.time() - start_time > time_limit * 0.9:
             break
+    
     return best_move
 
 def parse_move(move_str):
