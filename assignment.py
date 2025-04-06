@@ -84,14 +84,100 @@ def is_terminal(board):
     return True
 
 def evaluate_board(board, computer, opponent):
-    # 단순 평가 함수: 만약 승리면 매우 큰 값 반환, 아니면 돌의 개수 차이 계산
+    # 승리 조건 체크
     if check_win(board, computer):
         return 100000
     if check_win(board, opponent):
         return -100000
-    comp_count = sum(row.count(computer) for row in board)
-    opp_count = sum(row.count(opponent) for row in board)
-    return comp_count - opp_count
+    
+    score = 0
+    directions = [(0, 1), (1, 0), (1, 1), (1, -1)]  # 가로, 세로, 대각선 방향
+    
+    # 패턴 가중치
+    pattern_weights = {
+        'open_two': 10,      # 열린 2목
+        'closed_two': 5,     # 막힌 2목
+        'open_three': 100,   # 열린 3목 
+        'closed_three': 25,  # 막힌 3목
+        'open_four': 1000,   # 열린 4목
+        'closed_four': 200   # 막힌 4목
+    }
+    
+    # 모든 위치와 방향에 대해 패턴 검사
+    for r in range(BOARD_SIZE):
+        for c in range(BOARD_SIZE):
+            if board[r][c] == '.':
+                continue  # 빈 칸은 건너뜀
+                
+            stone = board[r][c]  # 현재 위치의 돌
+            
+            # 4방향으로 패턴 검사
+            for dr, dc in directions:
+                # 연속된 돌 개수 계산
+                count = 1
+                open_ends = 0
+                
+                # 정방향 검사
+                nr, nc = r + dr, c + dc
+                while 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE and board[nr][nc] == stone:
+                    count += 1
+                    nr += dr
+                    nc += dc
+                
+                # 정방향 끝이 열려있는지 확인
+                if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE and board[nr][nc] == '.':
+                    open_ends += 1
+                
+                # 역방향 검사
+                nr, nc = r - dr, c - dc
+                while 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE and board[nr][nc] == stone:
+                    count += 1
+                    nr -= dr
+                    nc -= dc
+                
+                # 역방향 끝이 열려있는지 확인
+                if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE and board[nr][nc] == '.':
+                    open_ends += 1
+                
+                # 중복 계산 방지 (같은 패턴이 여러 위치에서 계산되는 것 방지)
+                if (dr == 0 and dc == 1 and c == 0) or \
+                   (dr == 1 and dc == 0 and r == 0) or \
+                   (dr == 1 and dc == 1 and (r == 0 or c == 0)) or \
+                   (dr == 1 and dc == -1 and (r == 0 or c == BOARD_SIZE-1)):
+                    
+                    # 2, 3, 4목 패턴에 대해 점수 계산
+                    if 2 <= count <= 4:
+                        pattern_type = 'open_' if open_ends == 2 else 'closed_'
+                        if count == 2:
+                            pattern_type += 'two'
+                        elif count == 3:
+                            pattern_type += 'three'
+                        elif count == 4:
+                            pattern_type += 'four'
+                        
+                        weight = pattern_weights[pattern_type]
+                        if stone == computer:
+                            score += weight
+                        else:
+                            score -= weight * 1.2  # 방어에 더 가중치
+    
+    # 중앙 통제 가치 추가
+    center = BOARD_SIZE // 2
+    center_region = 3  # 중앙 3x3 영역
+    
+    for r in range(center - center_region, center + center_region + 1):
+        for c in range(center - center_region, center + center_region + 1):
+            if 0 <= r < BOARD_SIZE and 0 <= c < BOARD_SIZE:
+                # 중앙에 가까울수록 가중치 증가
+                distance_from_center = abs(r - center) + abs(c - center)
+                position_weight = 5 - distance_from_center
+                
+                if board[r][c] == computer:
+                    score += position_weight
+                elif board[r][c] == opponent:
+                    score -= position_weight
+    
+    return score
 
 def alpha_beta(board, depth, alpha, beta, maximizing, start_time, time_limit, computer, opponent):
     # 시간 초과 체크
