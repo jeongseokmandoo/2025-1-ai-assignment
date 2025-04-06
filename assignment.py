@@ -83,101 +83,91 @@ def is_terminal(board):
             return False
     return True
 
-def evaluate_board(board, computer, opponent):
-    # 승리 조건 체크
-    if check_win(board, computer):
-        return 100000
-    if check_win(board, opponent):
-        return -100000
-    
+def count_sequence(board, r, c, dr, dc, player):
+    """
+    (r, c)부터 (dr, dc) 방향으로 player의 돌이 연속된 길이와
+    양쪽 끝의 개수를 반환합니다.
+    """
+    n = BOARD_SIZE
+    length = 0
+    cur_r, cur_c = r, c
+    while 0 <= cur_r < n and 0 <= cur_c < n and board[cur_r][cur_c] == player:
+        length += 1
+        cur_r += dr
+        cur_c += dc
+
+    open_ends = 0
+    # 앞쪽(시퀀스 시작 전)
+    start_r = r - dr
+    start_c = c - dc
+    if start_r < 0 or start_r >= n or start_c < 0 or start_c >= n or board[start_r][start_c] == '.':
+        open_ends += 1
+    # 끝쪽(시퀀스 끝난 후)
+    if cur_r < 0 or cur_r >= n or cur_c < 0 or cur_c >= n or board[cur_r][cur_c] == '.':
+        open_ends += 1
+
+    return length, open_ends
+
+def pattern_weight(length, open_ends):
+    """
+    길이와 열린 끝(open_ends)에 따라 가중치를 반환합니다.
+    (예시는 기본적인 값이며, 실제 과제에서는 더 정교하게 조정할 수 있습니다.)
+    """
+    if length >= 5:
+        return 100000  # 승리 상태
+    if length == 4:
+        if open_ends == 2:
+            return 10000   # 열린 4: 즉시 승리 위협
+        elif open_ends == 1:
+            return 1000    # 닫힌 4
+    if length == 3:
+        if open_ends == 2:
+            return 1000    # 열린 3: 매우 강력한 수
+        elif open_ends == 1:
+            return 100     # 닫힌 3
+    if length == 2:
+        if open_ends == 2:
+            return 100     # 열린 2
+        elif open_ends == 1:
+            return 10      # 닫힌 2
+    if length == 1:
+        if open_ends == 2:
+            return 10
+        elif open_ends == 1:
+            return 1
+    return 0
+
+def evaluate_player(board, player):
+    """
+    보드 전체에서 주어진 플레이어의 모든 시퀀스를 평가하여 점수를 합산합니다.
+    중복 계산을 피하기 위해, 각 방향에서 시퀀스의 시작점(이전 칸이 player가 아닌 경우)만 평가합니다.
+    """
     score = 0
-    directions = [(0, 1), (1, 0), (1, 1), (1, -1)]  # 가로, 세로, 대각선 방향
-    
-    # 패턴 가중치
-    pattern_weights = {
-        'open_two': 10,      # 열린 2목
-        'closed_two': 5,     # 막힌 2목
-        'open_three': 100,   # 열린 3목 
-        'closed_three': 25,  # 막힌 3목
-        'open_four': 1000,   # 열린 4목
-        'closed_four': 200   # 막힌 4목
-    }
-    
-    # 모든 위치와 방향에 대해 패턴 검사
-    for r in range(BOARD_SIZE):
-        for c in range(BOARD_SIZE):
-            if board[r][c] == '.':
-                continue  # 빈 칸은 건너뜀
-                
-            stone = board[r][c]  # 현재 위치의 돌
-            
-            # 4방향으로 패턴 검사
-            for dr, dc in directions:
-                # 연속된 돌 개수 계산
-                count = 1
-                open_ends = 0
-                
-                # 정방향 검사
-                nr, nc = r + dr, c + dc
-                while 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE and board[nr][nc] == stone:
-                    count += 1
-                    nr += dr
-                    nc += dc
-                
-                # 정방향 끝이 열려있는지 확인
-                if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE and board[nr][nc] == '.':
-                    open_ends += 1
-                
-                # 역방향 검사
-                nr, nc = r - dr, c - dc
-                while 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE and board[nr][nc] == stone:
-                    count += 1
-                    nr -= dr
-                    nc -= dc
-                
-                # 역방향 끝이 열려있는지 확인
-                if 0 <= nr < BOARD_SIZE and 0 <= nc < BOARD_SIZE and board[nr][nc] == '.':
-                    open_ends += 1
-                
-                # 중복 계산 방지 (같은 패턴이 여러 위치에서 계산되는 것 방지)
-                if (dr == 0 and dc == 1 and c == 0) or \
-                   (dr == 1 and dc == 0 and r == 0) or \
-                   (dr == 1 and dc == 1 and (r == 0 or c == 0)) or \
-                   (dr == 1 and dc == -1 and (r == 0 or c == BOARD_SIZE-1)):
-                    
-                    # 2, 3, 4목 패턴에 대해 점수 계산
-                    if 2 <= count <= 4:
-                        pattern_type = 'open_' if open_ends == 2 else 'closed_'
-                        if count == 2:
-                            pattern_type += 'two'
-                        elif count == 3:
-                            pattern_type += 'three'
-                        elif count == 4:
-                            pattern_type += 'four'
-                        
-                        weight = pattern_weights[pattern_type]
-                        if stone == computer:
-                            score += weight
-                        else:
-                            score -= weight * 1.2  # 방어에 더 가중치
-    
-    # 중앙 통제 가치 추가
-    center = BOARD_SIZE // 2
-    center_region = 3  # 중앙 3x3 영역
-    
-    for r in range(center - center_region, center + center_region + 1):
-        for c in range(center - center_region, center + center_region + 1):
-            if 0 <= r < BOARD_SIZE and 0 <= c < BOARD_SIZE:
-                # 중앙에 가까울수록 가중치 증가
-                distance_from_center = abs(r - center) + abs(c - center)
-                position_weight = 5 - distance_from_center
-                
-                if board[r][c] == computer:
-                    score += position_weight
-                elif board[r][c] == opponent:
-                    score -= position_weight
-    
+    directions = [(0,1), (1,0), (1,1), (1,-1)]
+    n = BOARD_SIZE
+    for r in range(n):
+        for c in range(n):
+            if board[r][c] == player:
+                for dr, dc in directions:
+                    # 이전 칸이 player이면 이미 계산한 시퀀스이므로 건너뜁니다.
+                    prev_r = r - dr
+                    prev_c = c - dc
+                    if 0 <= prev_r < n and 0 <= prev_c < n and board[prev_r][prev_c] == player:
+                        continue
+                    length, open_ends = count_sequence(board, r, c, dr, dc, player)
+                    score += pattern_weight(length, open_ends)
     return score
+
+def evaluate_board(board, computer, opponent):
+    """
+    향상된 평가 함수:
+    - 컴퓨터와 상대방의 점수를 각각 계산한 후 그 차이를 반환합니다.
+    """
+    # 승리 여부는 check_win에서 이미 처리되므로 여기서는 시퀀스 점수만 계산합니다.
+    comp_score = evaluate_player(board, computer)
+    opp_score = evaluate_player(board, opponent)
+    return comp_score - opp_score
+
 
 def alpha_beta(board, depth, alpha, beta, maximizing, start_time, time_limit, computer, opponent):
     # 시간 초과 체크
